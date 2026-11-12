@@ -3,9 +3,9 @@
 //   npm run poll                                       check mentions once and reply
 //   npm run poll -- --dry-run                          check mentions, print replies, post nothing
 //   npm run poll -- --loop 60                          keep polling every 60 seconds
-//   npm run refresh                                    rebuild the Kalshi event index now
+//   npm run refresh                                    rebuild the event index now
 import { answerQuestion, type Deps } from "./answer.ts";
-import { fetchEvent, loadIndex } from "./kalshi.ts";
+import { loadIndex, SOURCES, sourceFor } from "./catalog.ts";
 import { JevMatcher, type Matcher } from "./match.ts";
 import { EventIndex } from "./retrieve.ts";
 import { XBot } from "./x.ts";
@@ -20,7 +20,12 @@ const log = (msg: string) => console.error(`[${new Date().toISOString()}] ${msg}
 
 async function deps(matcher?: Matcher): Promise<Deps> {
   const events = await loadIndex(INDEX_FILE, INDEX_MAX_AGE_MS, log);
-  return { index: new EventIndex(events), matcher: matcher ?? new JevMatcher(), fetchEvent };
+  return {
+    index: new EventIndex(events),
+    matcher: matcher ?? new JevMatcher(),
+    sources: SOURCES,
+    fetchEvent: (e) => sourceFor(e.source).fetchEvent(e.ticker),
+  };
 }
 
 async function ask(question: string, context?: string): Promise<void> {
@@ -29,7 +34,7 @@ async function ask(question: string, context?: string): Promise<void> {
     const events = await loadIndex(INDEX_FILE, INDEX_MAX_AGE_MS, log);
     const hits = new EventIndex(events).search(question);
     console.log("TYPESAFE_API_KEY is not set, so Jev cannot pick. Shortlist only:");
-    for (const h of hits) console.log(`  ${h.score.toFixed(2)}  ${h.event.ticker}  ${h.event.title}`);
+    for (const h of hits) console.log(`  ${h.score.toFixed(2)}  ${h.event.source}  ${h.event.ticker}  ${h.event.title}`);
     return;
   }
   const a = await answerQuestion(question, await deps(), context);

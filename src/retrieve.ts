@@ -1,5 +1,5 @@
 // Cheap lexical shortlist: narrows thousands of events to a handful for Jev to choose between.
-import type { IndexedEvent } from "./kalshi.ts";
+import type { IndexedEvent, SourceName } from "./types.ts";
 
 const STOP = new Set(
   `a an the of to in on at for by with from is are was were be been will would could should can do does did
@@ -90,11 +90,13 @@ export class EventIndex {
     for (const [t, c] of df) this.idf.set(t, Math.log(1 + (n - c + 0.5) / (c + 0.5)));
   }
 
-  search(question: string, limit = 10): Candidate[] {
+  /** Best matches for the question, optionally from one source only. */
+  search(question: string, limit = 10, source?: SourceName): Candidate[] {
     const terms = [...new Set(tokenize(question))];
     if (terms.length === 0) return [];
     const scored: Candidate[] = [];
     for (const d of this.docs) {
+      if (source && d.event.source !== source) continue;
       let score = 0;
       for (const t of terms) {
         const w = this.idf.get(t);

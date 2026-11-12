@@ -1,25 +1,18 @@
-// Turn live Kalshi prices into a reply that fits in one post.
-import type { KalshiEvent, KalshiMarket } from "./kalshi.ts";
+// Turn live prices into a reply that fits in one post.
+import type { Market, MarketEvent } from "./types.ts";
 
 const MAX_LEN = 280;
 const URL_LEN = 23; // X counts every link as 23 characters
 
-/** Implied probability of Yes, 0 to 1, or null when the market has no usable price. */
-export function impliedProbability(m: KalshiMarket): number | null {
-  const bid = num(m.yes_bid_dollars);
-  const ask = num(m.yes_ask_dollars);
-  const last = num(m.last_price_dollars);
+/** Implied probability, 0 to 1, or null when the market has no usable price. */
+export function impliedProbability(m: Market): number | null {
+  const { bid, ask, last } = m;
+  const twoSided = bid !== undefined && ask !== undefined && bid > 0 && ask < 1;
   // A tight two-sided quote is the best read; otherwise fall back to the last trade.
-  if (bid !== null && ask !== null && bid > 0 && ask < 1 && ask - bid <= 0.1) return (bid + ask) / 2;
-  if (last !== null && last > 0) return last;
-  if (bid !== null && ask !== null && bid > 0 && ask < 1) return (bid + ask) / 2;
+  if (twoSided && ask - bid <= 0.1) return (bid + ask) / 2;
+  if (last !== undefined && last > 0) return last;
+  if (twoSided) return (bid + ask) / 2;
   return null;
-}
-
-function num(s: string | undefined): number | null {
-  if (s === undefined || s === "") return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
 }
 
 export function pct(p: number): string {
@@ -28,50 +21,76 @@ export function pct(p: number): string {
   return `${Math.round(p * 100)}%`;
 }
 
-export function marketUrl(event: KalshiEvent): string {
-  return `https://kalshi.com/markets/${event.series_ticker.toLowerCase()}`;
+/** One source's contribution to a reply. */
+export interface Part {
+  label: string;
+  title: string;
+  lines: string[];
+  url: string;
 }
 
-function liveMarkets(event: KalshiEvent): KalshiMarket[] {
-  return (event.markets ?? []).filter((m) => !m.status || m.status === "active");
-}
-
-/** Reply for one specific market (a yes/no question, or one outcome of a bigger event). */
-export function formatSingle(event: KalshiEvent, market: KalshiMarket): string {
+/** One specific market: a yes/no question, or one outcome of a bigger event. */
+export function partSingle(event: MarketEvent, market: Market, label: string): Part {
   const p = impliedProbability(market);
   const title = market.title || event.title;
-  // In multi-outcome events the market title is often the shared event question, so name the outcome.
-  const sub = market.yes_sub_title ?? "";
-  const shared = (event.markets?.length ?? 0) > 1 && !title.toLowerCase().includes(sub.toLowerCase());
-  const label = sub && shared ? `${sub}: ` : "";
-  const body =
-    p === null ? `${title}\n${label}No live price on Kalshi right now.` : `${title}\n${label}${pct(p)} yes on Kalshi`;
-  return fit(body, marketUrl(event));
+  let line: string;
+  if (p === null) line = "No live price right now";
+  else if (market.kind === "outcome") line = `${market.outcome}: ${pct(p)}`;
+  else {
+    // In multi-outcome events the title is often the shared event question, so name the outcome.
+    const shared = event.markets.length > 1 && !title.toLowerCase().includes(market.outcome.toLowerCase());
+    line = `${market.outcome && shared ? `${market.outcome}: ` : ""}${pct(p)} yes`;
+  }
+  return { label, title, lines: [line], url: event.url };
 }
 
-/** Reply for a whole multi-outcome event: the leading outcomes by price. */
-export function formatTop(event: KalshiEvent, count = 4): string {
-  const priced = liveMarkets(event)
-    .map((m) => ({ name: m.yes_sub_title || m.title, p: impliedProbability(m) }))
+/** A whole multi-outcome event: the leading outcomes by price. */
+export function partTop(event: MarketEvent, label: string, count = 4): Part {
+  const priced = event.markets
+    .map((m) => ({ name: m.outcome || m.title, p: impliedProbability(m) }))
     .filter((x): x is { name: string; p: number } => x.p !== null)
-    .sort((a, b) => b.p - a.p);
-  if (priced.length === 0) return fit(`${event.title}\nNo live prices on Kalshi right now.`, marketUrl(event));
-  const url = marketUrl(event);
-  // Drop trailing outcomes until the post fits.
-  for (let n = Math.min(count, priced.length); n >= 1; n--) {
-    const lines = priced.slice(0, n).map((x) => `${x.name}: ${pct(x.p)}`);
-    const body = `${event.title}\n${lines.join("\n")}\n(Kalshi)`;
-    if (body.length + 1 + URL_LEN <= MAX_LEN) return `${body}\n${url}`;
-  }
-  return fit(`${event.title}\n${priced[0].name}: ${pct(priced[0].p)} (Kalshi)`, url);
+    .sort((a, b) => b.p - a.p)
+    .slice(0, count);
+  const lines = priced.length ? priced.map((x) => `${x.name}: ${pct(x.p)}`) : ["No live prices right now"];
+  return { label, title: event.title, lines, url: event.url };
 }
 
 export function formatNotFound(): string {
-  return "I couldn't find a Kalshi market that clearly matches that. Try naming the event more specifically.";
+  return "I couldn't find a prediction market that clearly matches that. Try naming the event more specifically.";
 }
 
-function fit(body: string, url: string): string {
-  const room = MAX_LEN - URL_LEN - 1;
-  const text = body.length > room ? `${body.slice(0, room - 1).trimEnd()}…` : body;
-  return `${text}\n${url}`;
+/** Length as X counts it: every link is 23 characters whatever its real length. */
+export function postLength(text: string): number {
+  return text.replace(/https?:\/\/\S+/g, "x".repeat(URL_LEN)).length;
+}
+
+const clip = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, Math.max(max - 1, 1)).trimEnd()}…`);
+
+function render(parts: Part[], maxLines: number, maxTitle: number): string {
+  if (parts.length === 1) {
+    const p = parts[0];
+    const lines = p.lines.slice(0, maxLines);
+    const body =
+      lines.length === 1 ? `${lines[0]} on ${p.label}` : `${lines.join("\n")}\n(${p.label})`;
+    return `${clip(p.title, maxTitle)}\n${body}\n${p.url}`;
+  }
+  return parts
+    .map((p) => `${p.label}: ${clip(p.title, maxTitle)}\n${p.lines.slice(0, maxLines).join("\n")}\n${p.url}`)
+    .join("\n\n");
+}
+
+/** Compose the reply, trimming outcome lines first and titles second until it fits. */
+export function formatReply(parts: Part[]): string {
+  const most = Math.max(...parts.map((p) => p.lines.length));
+  for (let lines = Math.min(most, parts.length === 1 ? 4 : 2); lines >= 1; lines--) {
+    const text = render(parts, lines, 400);
+    if (postLength(text) <= MAX_LEN) return text;
+  }
+  for (let title = 120; title >= 10; title -= 5) {
+    const text = render(parts, 1, title);
+    if (postLength(text) <= MAX_LEN) return text;
+  }
+  // Even clipped titles did not fit (very long outcome names): keep only the first source.
+  const p = parts[0];
+  return `${clip(p.title, 60)}\n${clip(p.lines[0], 150)}\n${p.url}`;
 }

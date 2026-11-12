@@ -1,104 +1,172 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { answerQuestion, type Deps } from "../src/answer.ts";
-import { formatSingle, formatTop, impliedProbability, pct } from "../src/format.ts";
-import type { IndexedEvent, KalshiEvent } from "../src/kalshi.ts";
+import { formatReply, impliedProbability, type Part, pct, postLength } from "../src/format.ts";
 import type { Matcher, Pick } from "../src/match.ts";
 import { cleanQuestion, EventIndex } from "../src/retrieve.ts";
+import type { IndexedEvent, Market, MarketEvent, SourceName } from "../src/types.ts";
+
+const ev = (source: SourceName, ticker: string, title: string, outcomes: string[], category = ""): IndexedEvent => ({
+  source, ticker, title, subTitle: "", category, outcomes, volume: 1000,
+});
 
 const INDEX: IndexedEvent[] = [
-  { ticker: "KXSB-27", series: "KXSB", title: "Super Bowl champion?", subTitle: "2027", category: "Sports", outcomes: ["Kansas City Chiefs", "Buffalo Bills", "Detroit Lions"], volume: 1000 },
-  { ticker: "KXFED-26DEC", series: "KXFED", title: "Will the Federal Reserve cut rates in December?", subTitle: "Dec 2026", category: "Economics", outcomes: ["Cut"], volume: 1000 },
-  { ticker: "KXMARS-99", series: "KXMARS", title: "Will Elon Musk visit Mars in his lifetime?", subTitle: "", category: "Science", outcomes: ["Mars"], volume: 1000 },
-  ...Array.from({ length: 40 }, (_, i) => ({ ticker: `KXLEG-${i}`, series: "KXLEG", title: `Texas House District ${i} winner?`, subTitle: `House District ${i}`, category: "Elections", outcomes: ["Republican", "Democratic"], volume: 1000 })),
+  ev("kalshi", "KXSB-27", "Super Bowl champion? 2027", ["Kansas City Chiefs", "Buffalo Bills", "Detroit Lions"], "Sports"),
+  ev("kalshi", "KXFED-26DEC", "Will the Federal Reserve cut rates in December?", ["Cut"], "Economics"),
+  ev("kalshi", "KXMARS-99", "Will Elon Musk visit Mars in his lifetime?", ["Mars"], "Science"),
+  ...Array.from({ length: 40 }, (_, i) => ev("kalshi", `KXLEG-${i}`, `Texas House District ${i} winner?`, ["Republican", "Democratic"], "Elections")),
+  ev("polymarket", "super-bowl-2027", "Super Bowl 2027 winner", ["Chiefs", "Bills", "Lions"], "Sports"),
+  ev("polymarket", "gta-6", "Will GTA 6 release in 2027?", [], "Gaming"),
 ];
 
-const SB: KalshiEvent = {
-  event_ticker: "KXSB-27", series_ticker: "KXSB", title: "Super Bowl champion?",
-  markets: [
-    { ticker: "KXSB-27-KC", title: "Will the Kansas City Chiefs win the Super Bowl?", yes_sub_title: "Kansas City Chiefs", status: "active", yes_bid_dollars: "0.1700", yes_ask_dollars: "0.1900", last_price_dollars: "0.1800" },
-    { ticker: "KXSB-27-BUF", title: "Will the Buffalo Bills win the Super Bowl?", yes_sub_title: "Buffalo Bills", status: "active", yes_bid_dollars: "0.1200", yes_ask_dollars: "0.1400", last_price_dollars: "0.1300" },
-    { ticker: "KXSB-27-DET", title: "Will the Detroit Lions win the Super Bowl?", yes_sub_title: "Detroit Lions", status: "active", yes_bid_dollars: "0.0900", yes_ask_dollars: "0.1100", last_price_dollars: "0.1000" },
-  ],
+const yn = (id: string, title: string, outcome: string, bid: number, ask: number): Market => ({
+  id, title, outcome, kind: "yesno", bid, ask, last: (bid + ask) / 2,
+});
+
+const EVENTS: Record<string, MarketEvent> = {
+  "KXSB-27": {
+    source: "kalshi", title: "Super Bowl champion?", url: "https://kalshi.com/markets/kxsb",
+    markets: [
+      yn("KC", "Will the Kansas City Chiefs win the Super Bowl?", "Kansas City Chiefs", 0.17, 0.19),
+      yn("BUF", "Will the Buffalo Bills win the Super Bowl?", "Buffalo Bills", 0.12, 0.14),
+      yn("DET", "Will the Detroit Lions win the Super Bowl?", "Detroit Lions", 0.09, 0.11),
+    ],
+  },
+  "super-bowl-2027": {
+    source: "polymarket", title: "Super Bowl 2027 winner", url: "https://polymarket.com/event/super-bowl-2027",
+    markets: [
+      yn("p1", "Will the Chiefs win Super Bowl 2027?", "Chiefs", 0.19, 0.21),
+      yn("p2", "Will the Bills win Super Bowl 2027?", "Bills", 0.13, 0.15),
+    ],
+  },
+  "gta-6": {
+    source: "polymarket", title: "Will GTA 6 release in 2027?", url: "https://polymarket.com/event/gta-6",
+    markets: [yn("g", "Will GTA 6 release in 2027?", "", 0.6, 0.62)],
+  },
 };
 
-function deps(pick: Partial<Pick>, event = SB, outcome: Partial<Pick> = {}): Deps {
+const SOURCES = [
+  { name: "kalshi" as const, label: "Kalshi" },
+  { name: "polymarket" as const, label: "Polymarket" },
+];
+
+function deps(pick: Partial<Pick> = {}, outcome: Partial<Pick> = {}): Deps {
   const full: Pick = { index: 0, confidence: 0.95, fits: 0.95, ...pick };
   const matcher: Matcher = { pickEvent: async () => full, pickOutcome: async () => ({ ...full, ...outcome }) };
-  return { index: new EventIndex(INDEX), matcher, fetchEvent: async () => event, thresholds: { confidence: 0.6, fits: 0.7 } };
+  return {
+    index: new EventIndex(INDEX),
+    matcher,
+    sources: SOURCES,
+    fetchEvent: async (e) => {
+      const found = EVENTS[e.ticker];
+      if (!found) throw new Error(`no fixture for ${e.ticker}`);
+      return found;
+    },
+    thresholds: { confidence: 0.6, fits: 0.7 },
+  };
 }
 
 test("cleanQuestion strips handles and links", () => {
   assert.equal(cleanQuestion("@oddsbot odds the Fed cuts? https://t.co/abc"), "odds the Fed cuts?");
 });
 
-test("shortlist ranks the right event first and expands shorthand", () => {
+test("shortlist ranks the right event first, expands shorthand, and filters by source", () => {
   const idx = new EventIndex(INDEX);
   assert.equal(idx.search("what are the odds the fed cuts in december")[0].event.ticker, "KXFED-26DEC");
-  assert.equal(idx.search("chiefs super bowl odds?")[0].event.ticker, "KXSB-27");
+  assert.equal(idx.search("chiefs super bowl odds", 10, "kalshi")[0].event.ticker, "KXSB-27");
+  assert.equal(idx.search("chiefs super bowl odds", 10, "polymarket")[0].event.ticker, "super-bowl-2027");
   assert.deepEqual(idx.search("what are the odds"), []);
+  assert.deepEqual(idx.search("constructor toString"), []);
 });
 
 test("price reading: midpoint when tight, last trade when wide, null when empty", () => {
-  assert.equal(impliedProbability({ ticker: "a", title: "", yes_bid_dollars: "0.6200", yes_ask_dollars: "0.6400" }), 0.63);
-  assert.equal(impliedProbability({ ticker: "a", title: "", yes_bid_dollars: "0.1000", yes_ask_dollars: "0.9000", last_price_dollars: "0.4000" }), 0.4);
-  assert.equal(impliedProbability({ ticker: "a", title: "", yes_bid_dollars: "0.0000", yes_ask_dollars: "1.0000", last_price_dollars: "0.0000" }), null);
+  const m = (bid?: number, ask?: number, last?: number): Market => ({ id: "a", title: "", outcome: "", kind: "yesno", bid, ask, last });
+  assert.equal(impliedProbability(m(0.62, 0.64)), 0.63);
+  assert.equal(impliedProbability(m(0.1, 0.9, 0.4)), 0.4);
+  assert.equal(impliedProbability(m(0, 1, 0)), null);
+  assert.equal(impliedProbability(m(undefined, undefined, 0.55)), 0.55);
   assert.equal(pct(0.004), "<1%");
   assert.equal(pct(0.996), ">99%");
 });
 
-test("a named outcome gets its own price", async () => {
-  const a = await answerQuestion("@oddsbot odds the Chiefs win the Super Bowl?", deps({}));
+test("an event on both sites is quoted from both, Kalshi first", async () => {
+  const a = await answerQuestion("@oddsbot odds the Chiefs win the Super Bowl?", deps());
   assert.equal(a.matched, true);
-  assert.match(a.reply, /Kansas City Chiefs.*\n18% yes on Kalshi\nhttps:\/\/kalshi\.com\/markets\/kxsb$/);
+  assert.equal(
+    a.reply,
+    "Kalshi: Will the Kansas City Chiefs win the Super Bowl?\n18% yes\nhttps://kalshi.com/markets/kxsb\n\n" +
+      "Polymarket: Will the Chiefs win Super Bowl 2027?\n20% yes\nhttps://polymarket.com/event/super-bowl-2027",
+  );
+});
+
+test("an event on one site only is quoted from that site", async () => {
+  const a = await answerQuestion("@oddsbot will gta 6 release in 2027", deps());
+  assert.equal(a.reply, "Will GTA 6 release in 2027?\n61% yes on Polymarket\nhttps://polymarket.com/event/gta-6");
 });
 
 test("a whole-event question lists the leaders", async () => {
-  const a = await answerQuestion("@oddsbot who wins the super bowl", deps({}, SB, { fits: 0.5 }));
-  assert.match(a.reply, /Kansas City Chiefs: 18%\nBuffalo Bills: 13%\nDetroit Lions: 10%/);
+  const a = await answerQuestion("@oddsbot who wins the super bowl", deps({}, { fits: 0.5 }));
+  assert.match(a.reply, /Kalshi: Super Bowl champion\?\nKansas City Chiefs: 18%\nBuffalo Bills: 13%\n/);
+  assert.match(a.reply, /Polymarket: Super Bowl 2027 winner\nChiefs: 20%\nBills: 14%\n/);
 });
 
 test("low confidence or poor fit means no market is quoted", async () => {
   for (const pick of [{ confidence: 0.4 }, { fits: 0.3 }]) {
     // Several candidates, so both gates apply (a lone candidate skips the confidence gate).
     const a = await answerQuestion("@oddsbot super bowl or texas house district 3 odds", deps(pick));
-    assert.equal(a.matched, false);
-    assert.doesNotMatch(a.reply, /%/);
+    assert.doesNotMatch(a.reply, /Kalshi/);
   }
+  const none = await answerQuestion("@oddsbot texas house district 3 or 4 odds", deps({ fits: 0.3 }));
+  assert.equal(none.matched, false);
+  assert.doesNotMatch(none.reply, /%/);
 });
 
-test("replies always fit in a post", () => {
-  const long: KalshiEvent = {
-    ...SB,
-    title: "T".repeat(400),
-    markets: SB.markets!.map((m) => ({ ...m, title: "M".repeat(400), yes_sub_title: "S".repeat(120) })),
+test("one source failing does not cost the reply from the other", async () => {
+  const d = deps();
+  const inner = d.fetchEvent;
+  d.fetchEvent = async (e) => {
+    if (e.source === "kalshi") throw new Error("kalshi is down");
+    return inner(e);
   };
-  for (const reply of [formatSingle(long, long.markets![0]), formatTop(long)]) {
-    const counted = reply.replace(/https:\/\/\S+/, "x".repeat(23));
-    assert.ok(counted.length <= 280, `${counted.length} chars`);
-  }
-});
-
-test("words that collide with built-in property names are ordinary tokens", () => {
-  assert.deepEqual(new EventIndex(INDEX).search("constructor toString"), []);
+  const a = await answerQuestion("@oddsbot odds the Chiefs win the Super Bowl?", d);
+  assert.equal(a.matched, true);
+  assert.match(a.reply, /on Polymarket/);
+  assert.equal((a.trace.kalshi as { error: string }).error, "kalshi is down");
 });
 
 test("Jev resolves an outcome that keywords miss, and the reply names it", async () => {
-  const shared = { ...SB, markets: SB.markets!.map((m) => ({ ...m, title: "Who will win?" })) };
-  const a = await answerQuestion("@oddsbot josh allen team odds super bowl", deps({}, shared, { index: 1, fits: 0.9 }));
-  assert.match(a.reply, /Who will win\?\nBuffalo Bills: 13% yes on Kalshi/);
+  EVENTS["KXSB-27"].markets.forEach((m) => (m.title = "Who will win?"));
+  try {
+    const a = await answerQuestion("@oddsbot josh allen team odds super bowl", deps({}, { index: 1, fits: 0.9 }));
+    assert.match(a.reply, /Kalshi: Who will win\?\nBuffalo Bills: 13% yes/);
+  } finally {
+    EVENTS["KXSB-27"].markets.forEach((m) => (m.title = `Will the ${m.outcome} win the Super Bowl?`));
+  }
 });
 
 test("a bare question finds its market through the post it replies to", async () => {
   const seen: (string | undefined)[] = [];
-  const d = deps({});
-  d.matcher = { pickEvent: async (_q, _c, ctx) => (seen.push(ctx), { index: 0, confidence: 0.9, fits: 0.9 }), pickOutcome: async () => ({ index: 0, confidence: 0.9, fits: 0.2 }) };
+  const d = deps();
+  d.matcher = {
+    pickEvent: async (_q, _c, ctx) => (seen.push(ctx), { index: 0, confidence: 0.9, fits: 0.9 }),
+    pickOutcome: async () => ({ index: 0, confidence: 0.9, fits: 0.2 }),
+  };
+  const tickers = (a: { trace: Record<string, unknown> }) =>
+    ((a.trace.kalshi as { candidates: string[] }).candidates ?? []).map((c) => c.split(" ")[0]);
   const alone = await answerQuestion("@oddsbot odds they win?", d);
-  const tickers = (a: { trace: Record<string, unknown> }) => (a.trace.candidates as string[]).map((c) => c.split(" ")[0]);
   assert.ok(!tickers(alone).includes("KXSB-27"));
   const threaded = await answerQuestion("@oddsbot odds they win?", d, "@fan The Chiefs look unstoppable heading to the Super Bowl https://t.co/x");
-  assert.equal(threaded.matched, true);
   assert.equal(tickers(threaded)[0], "KXSB-27");
   assert.match(threaded.reply, /Kansas City Chiefs/);
   assert.equal(seen.at(-1), "The Chiefs look unstoppable heading to the Super Bowl");
+});
+
+test("replies always fit in a post", () => {
+  const long = (label: string, lines: number): Part => ({
+    label, title: "T".repeat(400), lines: Array.from({ length: lines }, () => `${"S".repeat(120)}: 50%`), url: `https://example.com/${"u".repeat(80)}`,
+  });
+  for (const parts of [[long("Kalshi", 1)], [long("Kalshi", 4)], [long("Kalshi", 4), long("Polymarket", 4)], [long("Kalshi", 1), long("Polymarket", 1)]]) {
+    const reply = formatReply(parts);
+    assert.ok(postLength(reply) <= 280, `${postLength(reply)} chars`);
+  }
 });

@@ -26,7 +26,7 @@ jobs:
 
       - run: npm ci --omit=dev
 
-      # The Kalshi event index is rebuilt once per 6-hour window and shared by every run in it.
+      # The event index (Kalshi + Polymarket) is rebuilt once per 6-hour window and shared by every run in it.
       - id: window
         run: echo "six_hour=$(( $(date +%s) / 21600 ))" >> "$GITHUB_OUTPUT"
 
@@ -34,7 +34,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/events.json
-          key: index-${{ steps.window.outputs.six_hour }}
+          key: index-v2-${{ steps.window.outputs.six_hour }}
 
       - if: steps.index.outputs.cache-hit != 'true'
         run: node src/cli.ts refresh

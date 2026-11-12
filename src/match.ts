@@ -1,7 +1,7 @@
 // Jev (TypeSafe's System One model) picks the market and tells us how sure it is.
 // A Choice always picks something, so a companion Noul asks whether anything fits at all.
 import { choice, noul, TypeSafeClient } from "@typesafe-ai/sdk";
-import type { IndexedEvent } from "./kalshi.ts";
+import type { IndexedEvent } from "./types.ts";
 
 export interface Pick {
   /** Index into the list that was offered. */
