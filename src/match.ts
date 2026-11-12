@@ -13,8 +13,9 @@ export interface Pick {
 }
 
 export interface Matcher {
-  pickEvent(question: string, candidates: IndexedEvent[]): Promise<Pick>;
-  pickOutcome(question: string, eventTitle: string, outcomes: string[]): Promise<Pick>;
+  /** `context` is the post the question was replying to or quoting, when there is one. */
+  pickEvent(question: string, candidates: IndexedEvent[], context?: string): Promise<Pick>;
+  pickOutcome(question: string, eventTitle: string, outcomes: string[], context?: string): Promise<Pick>;
 }
 
 export class JevMatcher implements Matcher {
@@ -24,7 +25,7 @@ export class JevMatcher implements Matcher {
     this.client = new TypeSafeClient({ defaultModel: model });
   }
 
-  async pickEvent(question: string, candidates: IndexedEvent[]): Promise<Pick> {
+  async pickEvent(question: string, candidates: IndexedEvent[], context?: string): Promise<Pick> {
     const options = labelled(
       candidates.map(
         (e) =>
@@ -33,16 +34,18 @@ export class JevMatcher implements Matcher {
       ),
     );
     return this.ask(
-      { question, note: "A person on social media is asking a bot for prediction-market odds." },
+      { question, ...thread(context), note: "A person on social media is asking a bot for prediction-market odds." },
       "Which prediction market is the person asking about?",
-      "Is at least one of the listed prediction markets about the same thing the person is asking about?",
+      context
+        ? "Taking the post being replied to into account, is at least one of the listed prediction markets about the same thing the person is asking about?"
+        : "Is at least one of the listed prediction markets about the same thing the person is asking about?",
       options,
     );
   }
 
-  async pickOutcome(question: string, eventTitle: string, outcomes: string[]): Promise<Pick> {
+  async pickOutcome(question: string, eventTitle: string, outcomes: string[], context?: string): Promise<Pick> {
     return this.ask(
-      { question, market: eventTitle },
+      { question, ...thread(context), market: eventTitle },
       "Which outcome of this market is the person asking about?",
       "Is the person asking about one specific listed outcome, rather than the market as a whole?",
       labelled(outcomes),
@@ -65,6 +68,11 @@ export class JevMatcher implements Matcher {
       fits: answers.fits.noul,
     };
   }
+}
+
+/** The post being replied to, which says what a bare "odds they win?" is about. */
+function thread(context?: string): Record<string, string> {
+  return context ? { post_being_replied_to: context } : {};
 }
 
 /** Label options o0, o1, … so the answer maps straight back to a list index. */

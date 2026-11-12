@@ -9,6 +9,8 @@ export interface Mention {
   id: string;
   text: string;
   authorId: string;
+  /** Text of the post this mention replies to or quotes, when there is one. */
+  context?: string;
 }
 
 interface State {
@@ -56,6 +58,7 @@ export class XBot {
       max_results: firstRun ? 5 : Math.min(Math.max(max, 5), 100),
       ...(firstRun ? {} : { since_id: this.state.sinceId }),
       "tweet.fields": ["author_id", "referenced_tweets"],
+      expansions: ["referenced_tweets.id"],
     });
     const tweets = page.tweets ?? [];
     if (firstRun) {
@@ -67,7 +70,13 @@ export class XBot {
     return tweets
       .filter((t) => t.author_id !== this.state.userId)
       .filter((t) => !t.referenced_tweets?.some((r) => r.type === "retweeted"))
-      .map((t) => ({ id: t.id, text: t.text, authorId: t.author_id ?? "" }))
+      .map((t) => {
+        // Prefer the post being replied to; fall back to a quoted post.
+        const refs = t.referenced_tweets ?? [];
+        const ref = refs.find((r) => r.type === "replied_to") ?? refs.find((r) => r.type === "quoted");
+        const parent = ref && page.includes.tweets.find((p) => p.id === ref.id);
+        return { id: t.id, text: t.text, authorId: t.author_id ?? "", context: parent?.text };
+      })
       .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
       .slice(0, max);
   }

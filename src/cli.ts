@@ -23,7 +23,7 @@ async function deps(matcher?: Matcher): Promise<Deps> {
   return { index: new EventIndex(events), matcher: matcher ?? new JevMatcher(), fetchEvent };
 }
 
-async function ask(question: string): Promise<void> {
+async function ask(question: string, context?: string): Promise<void> {
   if (!process.env.TYPESAFE_API_KEY) {
     // Without a Jev key we can still show what the shortlist looks like.
     const events = await loadIndex(INDEX_FILE, INDEX_MAX_AGE_MS, log);
@@ -32,7 +32,7 @@ async function ask(question: string): Promise<void> {
     for (const h of hits) console.log(`  ${h.score.toFixed(2)}  ${h.event.ticker}  ${h.event.title}`);
     return;
   }
-  const a = await answerQuestion(question, await deps());
+  const a = await answerQuestion(question, await deps(), context);
   console.log(JSON.stringify(a.trace, null, 2));
   console.log(`\n--- reply (${a.reply.length} chars, matched=${a.matched}) ---\n${a.reply}`);
 }
@@ -42,7 +42,7 @@ async function pollOnce(bot: XBot, d: Deps, dryRun: boolean): Promise<void> {
   log(`${mentions.length} new mention(s).`);
   for (const m of mentions) {
     try {
-      const a = await answerQuestion(m.text, d);
+      const a = await answerQuestion(m.text, d, m.context);
       log(`mention ${m.id}: ${JSON.stringify(a.trace)}`);
       if (!a.matched && !REPLY_WHEN_NOT_FOUND) log(`mention ${m.id}: no match, staying quiet.`);
       else if (dryRun) log(`mention ${m.id}: would reply:\n${a.reply}`);
@@ -73,7 +73,12 @@ async function poll(args: string[]): Promise<void> {
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
-if (cmd === "ask" && rest.length) await ask(rest.join(" "));
+if (cmd === "ask" && rest.length) {
+  // Optional: --context "text of the post being replied to"
+  const at = rest.indexOf("--context");
+  const context = at >= 0 ? rest.splice(at, 2)[1] : undefined;
+  await ask(rest.join(" "), context);
+}
 else if (cmd === "poll") await poll(rest);
 else if (cmd === "refresh") await loadIndex(INDEX_FILE, 0, log);
 else {

@@ -88,3 +88,17 @@ test("Jev resolves an outcome that keywords miss, and the reply names it", async
   const a = await answerQuestion("@oddsbot josh allen team odds super bowl", deps({}, shared, { index: 1, fits: 0.9 }));
   assert.match(a.reply, /Who will win\?\nBuffalo Bills: 13% yes on Kalshi/);
 });
+
+test("a bare question finds its market through the post it replies to", async () => {
+  const seen: (string | undefined)[] = [];
+  const d = deps({});
+  d.matcher = { pickEvent: async (_q, _c, ctx) => (seen.push(ctx), { index: 0, confidence: 0.9, fits: 0.9 }), pickOutcome: async () => ({ index: 0, confidence: 0.9, fits: 0.2 }) };
+  const alone = await answerQuestion("@oddsbot odds they win?", d);
+  const tickers = (a: { trace: Record<string, unknown> }) => (a.trace.candidates as string[]).map((c) => c.split(" ")[0]);
+  assert.ok(!tickers(alone).includes("KXSB-27"));
+  const threaded = await answerQuestion("@oddsbot odds they win?", d, "@fan The Chiefs look unstoppable heading to the Super Bowl https://t.co/x");
+  assert.equal(threaded.matched, true);
+  assert.equal(tickers(threaded)[0], "KXSB-27");
+  assert.match(threaded.reply, /Kansas City Chiefs/);
+  assert.equal(seen.at(-1), "The Chiefs look unstoppable heading to the Super Bowl");
+});
