@@ -1,0 +1,64 @@
+name: poll
+
+on:
+  schedule:
+    # Every 5 minutes is the most often GitHub allows; runs are often delayed by several minutes.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+# Never let two runs overlap, or the same mention could be answered twice.
+concurrency: poll
+
+permissions:
+  contents: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --omit=dev
+
+      # The Kalshi event index is rebuilt once per 6-hour window and shared by every run in it.
+      - id: window
+        run: echo "six_hour=$(( $(date +%s) / 21600 ))" >> "$GITHUB_OUTPUT"
+
+      - id: index
+        uses: actions/cache@v4
+        with:
+          path: data/events.json
+          key: index-${{ steps.window.outputs.six_hour }}
+
+      - if: steps.index.outputs.cache-hit != 'true'
+        run: node src/cli.ts refresh
+
+      # data/state.json remembers the last mention handled. If it is ever lost, the bot skips
+      # whatever is waiting and starts fresh, so the failure mode is a missed reply, not a double one.
+      - uses: actions/cache/restore@v4
+        with:
+          path: data/state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: state-
+
+      - run: node src/cli.ts poll
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          # The index step above owns refreshing, so the poll never rebuilds it mid-run.
+          INDEX_MAX_AGE_HOURS: "48"
+
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}

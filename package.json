@@ -1,0 +1,24 @@
+{
+  "name": "odds-bot",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "ask": "node --env-file-if-exists=.env src/cli.ts ask",
+    "poll": "node --env-file-if-exists=.env src/cli.ts poll",
+    "refresh": "node --env-file-if-exists=.env src/cli.ts refresh",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.7.0",
+    "twitter-api-v2": "^1.31.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
