@@ -35,13 +35,12 @@ If the mention replies to or quotes another post, that post's text is used as co
 | `npm run poll` | Reads new mentions once and replies. |
 | `npm run poll -- --loop 60` | Keeps polling every 60 seconds. |
 | `npm run refresh` | Rebuilds the event index now. |
+| `npm test` | Runs the tests (no keys or network needed). |
 
 `ask` also takes `--context "text of the post being replied to"`.
 
 Adding a source means one file implementing `Source` (see `src/polymarket.ts`) and one entry in
 `SOURCES` in `src/catalog.ts`.
-
-| `npm test` | Runs the tests (no keys or network needed). |
 
 The first `poll` only records where the mention timeline currently ends, so old mentions are
 never answered. `data/state.json` holds that position; keep it between runs.
