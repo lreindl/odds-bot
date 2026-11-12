@@ -3,7 +3,8 @@ name: poll
 on:
   schedule:
     # Every 5 minutes is the most often GitHub allows; runs are often delayed by several minutes.
-    - cron: "*/5 * * * *"
+    # Offset from :00/:05 because GitHub drops or delays schedules most at those busy minutes.
+    - cron: "3-58/5 * * * *"
   workflow_dispatch:
 
 # Never let two runs overlap, or the same mention could be answered twice.
