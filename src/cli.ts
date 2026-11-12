@@ -4,7 +4,9 @@
 //   npm run poll -- --dry-run                          check mentions, print replies, post nothing
 //   npm run poll -- --loop 60                          keep polling every 60 seconds
 //   npm run refresh                                    rebuild the event index now
+import { openAsBlob } from "node:fs";
 import { answerQuestion, type Deps } from "./answer.ts";
+import { fetchImages } from "./images.ts";
 import { loadIndex, SOURCES, sourceFor } from "./catalog.ts";
 import { JevMatcher, type Matcher } from "./match.ts";
 import { EventIndex } from "./retrieve.ts";
@@ -22,13 +24,13 @@ async function deps(matcher?: Matcher): Promise<Deps> {
   const events = await loadIndex(INDEX_FILE, INDEX_MAX_AGE_MS, log);
   return {
     index: new EventIndex(events),
-    matcher: matcher ?? new JevMatcher(),
+    matcher: matcher ?? new JevMatcher(log),
     sources: SOURCES,
     fetchEvent: (e) => sourceFor(e.source).fetchEvent(e.ticker),
   };
 }
 
-async function ask(question: string, context?: string): Promise<void> {
+async function ask(question: string, context?: string, imagePaths: string[] = []): Promise<void> {
   if (!process.env.TYPESAFE_API_KEY) {
     // Without a Jev key we can still show what the shortlist looks like.
     const events = await loadIndex(INDEX_FILE, INDEX_MAX_AGE_MS, log);
@@ -37,7 +39,8 @@ async function ask(question: string, context?: string): Promise<void> {
     for (const h of hits) console.log(`  ${h.score.toFixed(2)}  ${h.event.source}  ${h.event.ticker}  ${h.event.title}`);
     return;
   }
-  const a = await answerQuestion(question, await deps(), context);
+  const images = await Promise.all(imagePaths.map((p) => openAsBlob(p)));
+  const a = await answerQuestion(question, await deps(), { text: context, images });
   console.log(JSON.stringify(a.trace, null, 2));
   console.log(`\n--- reply (${a.reply.length} chars, matched=${a.matched}) ---\n${a.reply}`);
 }
@@ -47,7 +50,8 @@ async function pollOnce(bot: XBot, d: Deps, dryRun: boolean): Promise<void> {
   log(`${mentions.length} new mention(s).`);
   for (const m of mentions) {
     try {
-      const a = await answerQuestion(m.text, d, m.context);
+      const images = await fetchImages(m.imageUrls, log);
+      const a = await answerQuestion(m.text, d, { text: m.context, images });
       log(`mention ${m.id}: ${JSON.stringify(a.trace)}`);
       if (!a.matched && !REPLY_WHEN_NOT_FOUND) log(`mention ${m.id}: no match, staying quiet.`);
       else if (dryRun) log(`mention ${m.id}: would reply:\n${a.reply}`);
@@ -79,10 +83,12 @@ async function poll(args: string[]): Promise<void> {
 
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "ask" && rest.length) {
-  // Optional: --context "text of the post being replied to"
+  // Optional: --context "text of the post being replied to"  --image path/to/file.jpg (repeatable)
   const at = rest.indexOf("--context");
   const context = at >= 0 ? rest.splice(at, 2)[1] : undefined;
-  await ask(rest.join(" "), context);
+  const imagePaths: string[] = [];
+  for (let i = rest.indexOf("--image"); i >= 0; i = rest.indexOf("--image")) imagePaths.push(rest.splice(i, 2)[1]);
+  await ask(rest.join(" "), context, imagePaths);
 }
 else if (cmd === "poll") await poll(rest);
 else if (cmd === "refresh") await loadIndex(INDEX_FILE, 0, log);

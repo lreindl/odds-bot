@@ -154,14 +154,14 @@ test("a bare question finds its market through the post it replies to", async ()
   const seen: (string | undefined)[] = [];
   const d = deps();
   d.matcher = {
-    pickEvent: async (_q, _c, ctx) => (seen.push(ctx), { index: 0, confidence: 0.9, fits: 0.9 }),
+    pickEvent: async (_q, _c, thread) => (seen.push(thread?.text), { index: 0, confidence: 0.9, fits: 0.9 }),
     pickOutcome: async () => ({ index: 0, confidence: 0.9, fits: 0.2 }),
   };
   const tickers = (a: { trace: Record<string, unknown> }) =>
     ((a.trace.kalshi as { candidates: string[] }).candidates ?? []).map((c) => c.split(" ")[0]);
   const alone = await answerQuestion("@oddsbot odds they win?", d);
   assert.ok(!tickers(alone).includes("KXSB-27"));
-  const threaded = await answerQuestion("@oddsbot odds they win?", d, "@fan The Chiefs look unstoppable heading to the Super Bowl https://t.co/x");
+  const threaded = await answerQuestion("@oddsbot odds they win?", d, { text: "@fan The Chiefs look unstoppable heading to the Super Bowl https://t.co/x" });
   assert.equal(tickers(threaded)[0], "KXSB-27");
   assert.match(threaded.reply, /Chiefs/);
   assert.equal(seen.at(-1), "The Chiefs look unstoppable heading to the Super Bowl");
@@ -175,4 +175,18 @@ test("replies always fit in a post", () => {
     const reply = formatReply(parts);
     assert.ok(postLength(reply) <= 280, `${postLength(reply)} chars`);
   }
+});
+
+test("attached images reach Jev but never the keyword search", async () => {
+  const got: number[] = [];
+  const d = deps();
+  d.matcher = {
+    pickEvent: async (_q, _c, thread) => (got.push(thread?.images?.length ?? 0), { index: 0, confidence: 0.9, fits: 0.9 }),
+    pickOutcome: async (_q, _t, _o, thread) => (got.push(thread?.images?.length ?? 0), { index: 0, confidence: 0.9, fits: 0.9 }),
+  };
+  const picture = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" });
+  const a = await answerQuestion("@oddsbot who wins the super bowl", d, { images: [picture] });
+  assert.equal(a.matched, true);
+  assert.equal(a.trace.images, 1);
+  assert.ok(got.length >= 2 && got.every((n) => n === 1));
 });

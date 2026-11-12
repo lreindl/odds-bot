@@ -11,6 +11,8 @@ export interface Mention {
   authorId: string;
   /** Text of the post this mention replies to or quotes, when there is one. */
   context?: string;
+  /** Image links from the parent post first, then the mention itself. Videos give their preview frame. */
+  imageUrls: string[];
 }
 
 interface State {
@@ -57,8 +59,9 @@ export class XBot {
     const page = await this.api.v2.userMentionTimeline(this.state.userId!, {
       max_results: firstRun ? 5 : Math.min(Math.max(max, 5), 100),
       ...(firstRun ? {} : { since_id: this.state.sinceId }),
-      "tweet.fields": ["author_id", "referenced_tweets"],
-      expansions: ["referenced_tweets.id"],
+      "tweet.fields": ["author_id", "referenced_tweets", "attachments"],
+      expansions: ["referenced_tweets.id", "attachments.media_keys", "referenced_tweets.id.attachments.media_keys"],
+      "media.fields": ["type", "url", "preview_image_url"],
     });
     const tweets = page.tweets ?? [];
     if (firstRun) {
@@ -75,7 +78,14 @@ export class XBot {
         const refs = t.referenced_tweets ?? [];
         const ref = refs.find((r) => r.type === "replied_to") ?? refs.find((r) => r.type === "quoted");
         const parent = ref && page.includes.tweets.find((p) => p.id === ref.id);
-        return { id: t.id, text: t.text, authorId: t.author_id ?? "", context: parent?.text };
+        const media = page.includes.media;
+        const imagesOf = (keys: string[] | undefined) =>
+          (keys ?? [])
+            .map((k) => media.find((m) => m.media_key === k))
+            .map((m) => (m?.type === "photo" ? m.url : m?.preview_image_url))
+            .filter((u): u is string => !!u);
+        const imageUrls = [...imagesOf(parent?.attachments?.media_keys), ...imagesOf(t.attachments?.media_keys)];
+        return { id: t.id, text: t.text, authorId: t.author_id ?? "", context: parent?.text, imageUrls };
       })
       .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
       .slice(0, max);

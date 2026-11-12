@@ -2,7 +2,7 @@
 // listed on two sites does not split Jev's confidence, and a reply can quote both side by side.
 //   shortlist per source → Jev pick → confidence gate → live prices → reply
 import { formatNotFound, formatReply, type Part, partSingle, partTop } from "./format.ts";
-import type { Matcher } from "./match.ts";
+import type { Matcher, Thread } from "./match.ts";
 import { type Candidate, cleanQuestion, type EventIndex, tokenize } from "./retrieve.ts";
 import type { IndexedEvent, MarketEvent, SourceName } from "./types.ts";
 
@@ -42,20 +42,25 @@ export interface Deps {
 }
 
 /**
- * @param rawContext The post the mention replies to or quotes, if any. People tag the bot under
- *   someone else's post and ask "odds they win?", so the subject often lives there.
+ * @param around The post the mention replies to or quotes, and any attached images. People tag
+ *   the bot under someone else's post and ask "odds they win?", so the subject often lives there.
  */
-export async function answerQuestion(rawText: string, deps: Deps, rawContext?: string): Promise<Answer> {
+export async function answerQuestion(rawText: string, deps: Deps, around?: Thread): Promise<Answer> {
   const question = cleanQuestion(rawText);
-  const context = rawContext ? cleanQuestion(rawContext).slice(0, MAX_CONTEXT_CHARS) : undefined;
-  const trace: Record<string, unknown> = { question, ...(context ? { context } : {}) };
+  const context = around?.text ? cleanQuestion(around.text).slice(0, MAX_CONTEXT_CHARS) : undefined;
+  const thread: Thread = { text: context || undefined, images: around?.images };
+  const trace: Record<string, unknown> = {
+    question,
+    ...(context ? { context } : {}),
+    ...(thread.images?.length ? { images: thread.images.length } : {}),
+  };
 
   const results = await Promise.all(
     deps.sources.map(async (source) => {
       const sourceTrace: Record<string, unknown> = {};
       trace[source.name] = sourceTrace;
       try {
-        return await answerFromSource(source, question, context, deps, sourceTrace);
+        return await answerFromSource(source, question, thread, deps, sourceTrace);
       } catch (err) {
         // One source failing must not cost the reply from the other.
         sourceTrace.error = (err as Error).message;
@@ -71,11 +76,12 @@ export async function answerQuestion(rawText: string, deps: Deps, rawContext?: s
 async function answerFromSource(
   source: { name: SourceName; label: string },
   question: string,
-  context: string | undefined,
+  thread: Thread,
   deps: Deps,
   trace: Record<string, unknown>,
 ): Promise<Part | null> {
   const t = deps.thresholds ?? DEFAULT_THRESHOLDS;
+  const context = thread.text;
   const candidates = shortlist(deps.index, source.name, question, context);
   trace.candidates = candidates.map((c) => `${c.event.ticker} (${c.score.toFixed(2)}) ${c.event.title}`);
   if (candidates.length === 0) return null;
@@ -83,7 +89,7 @@ async function answerFromSource(
   const pick = await deps.matcher.pickEvent(
     question,
     candidates.map((c) => c.event),
-    context,
+    thread,
   );
   trace.eventPick = pick;
   const chosen = candidates[pick.index]?.event;
@@ -112,7 +118,7 @@ async function answerFromSource(
       question,
       event.title,
       pool.map((m) => m.outcome || m.title),
-      context,
+      thread,
     );
     trace.outcomePick = op;
     const m = pool[op.index];
