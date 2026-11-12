@@ -94,20 +94,25 @@ test("an event on both sites is quoted from both, Kalshi first", async () => {
   assert.equal(a.matched, true);
   assert.equal(
     a.reply,
-    "Kalshi: Will the Kansas City Chiefs win the Super Bowl?\n18% yes\nhttps://kalshi.com/markets/kxsb\n\n" +
-      "Polymarket: Will the Chiefs win Super Bowl 2027?\n20% yes\nhttps://polymarket.com/event/super-bowl-2027",
+    "Will the Chiefs win Super Bowl 2027?\n" +
+      "Kalshi: 18% https://kalshi.com/markets/kxsb\n" +
+      "Polymarket: 20% https://polymarket.com/event/super-bowl-2027",
   );
 });
 
 test("an event on one site only is quoted from that site", async () => {
   const a = await answerQuestion("@oddsbot will gta 6 release in 2027", deps());
-  assert.equal(a.reply, "Will GTA 6 release in 2027?\n61% yes on Polymarket\nhttps://polymarket.com/event/gta-6");
+  assert.equal(a.reply, "Will GTA 6 release in 2027?\nPolymarket: 61% https://polymarket.com/event/gta-6");
 });
 
 test("a whole-event question lists the leaders", async () => {
   const a = await answerQuestion("@oddsbot who wins the super bowl", deps({}, { fits: 0.5 }));
-  assert.match(a.reply, /Kalshi: Super Bowl champion\?\nKansas City Chiefs: 18%\nBuffalo Bills: 13%\n/);
-  assert.match(a.reply, /Polymarket: Super Bowl 2027 winner\nChiefs: 20%\nBills: 14%\n/);
+  assert.equal(
+    a.reply,
+    "Super Bowl champion?\n" +
+      "Kalshi: Kansas City Chiefs 18%, Buffalo Bills 13%, Detroit Lions 10% https://kalshi.com/markets/kxsb\n" +
+      "Polymarket: Chiefs 20%, Bills 14% https://polymarket.com/event/super-bowl-2027",
+  );
 });
 
 test("low confidence or poor fit means no market is quoted", async () => {
@@ -130,7 +135,8 @@ test("one source failing does not cost the reply from the other", async () => {
   };
   const a = await answerQuestion("@oddsbot odds the Chiefs win the Super Bowl?", d);
   assert.equal(a.matched, true);
-  assert.match(a.reply, /on Polymarket/);
+  assert.match(a.reply, /^Will the Chiefs win Super Bowl 2027\?\nPolymarket: 20% /);
+  assert.doesNotMatch(a.reply, /Kalshi/);
   assert.equal((a.trace.kalshi as { error: string }).error, "kalshi is down");
 });
 
@@ -138,7 +144,7 @@ test("Jev resolves an outcome that keywords miss, and the reply names it", async
   EVENTS["KXSB-27"].markets.forEach((m) => (m.title = "Who will win?"));
   try {
     const a = await answerQuestion("@oddsbot josh allen team odds super bowl", deps({}, { index: 1, fits: 0.9 }));
-    assert.match(a.reply, /Kalshi: Who will win\?\nBuffalo Bills: 13% yes/);
+    assert.match(a.reply, /\nKalshi: Buffalo Bills 13% /);
   } finally {
     EVENTS["KXSB-27"].markets.forEach((m) => (m.title = `Will the ${m.outcome} win the Super Bowl?`));
   }
@@ -157,13 +163,13 @@ test("a bare question finds its market through the post it replies to", async ()
   assert.ok(!tickers(alone).includes("KXSB-27"));
   const threaded = await answerQuestion("@oddsbot odds they win?", d, "@fan The Chiefs look unstoppable heading to the Super Bowl https://t.co/x");
   assert.equal(tickers(threaded)[0], "KXSB-27");
-  assert.match(threaded.reply, /Kansas City Chiefs/);
+  assert.match(threaded.reply, /Chiefs/);
   assert.equal(seen.at(-1), "The Chiefs look unstoppable heading to the Super Bowl");
 });
 
 test("replies always fit in a post", () => {
   const long = (label: string, lines: number): Part => ({
-    label, title: "T".repeat(400), lines: Array.from({ length: lines }, () => `${"S".repeat(120)}: 50%`), url: `https://example.com/${"u".repeat(80)}`,
+    label, title: "T".repeat(400), lines: Array.from({ length: lines }, () => `${"S".repeat(120)} 50%`), url: `https://example.com/${"u".repeat(80)}`,
   });
   for (const parts of [[long("Kalshi", 1)], [long("Kalshi", 4)], [long("Kalshi", 4), long("Polymarket", 4)], [long("Kalshi", 1), long("Polymarket", 1)]]) {
     const reply = formatReply(parts);

@@ -33,15 +33,10 @@ export interface Part {
 export function partSingle(event: MarketEvent, market: Market, label: string): Part {
   const p = impliedProbability(market);
   const title = market.title || event.title;
-  let line: string;
-  if (p === null) line = "No live price right now";
-  else if (market.kind === "outcome") line = `${market.outcome}: ${pct(p)}`;
-  else {
-    // In multi-outcome events the title is often the shared event question, so name the outcome.
-    const shared = event.markets.length > 1 && !title.toLowerCase().includes(market.outcome.toLowerCase());
-    line = `${market.outcome && shared ? `${market.outcome}: ` : ""}${pct(p)} yes`;
-  }
-  return { label, title, lines: [line], url: event.url };
+  // In multi-outcome events the title is often the shared event question, so name the outcome.
+  const shared = event.markets.length > 1 && !title.toLowerCase().includes(market.outcome.toLowerCase());
+  const name = market.outcome && (market.kind === "outcome" || shared) ? `${market.outcome} ` : "";
+  return { label, title, lines: [p === null ? "no live price" : `${name}${pct(p)}`], url: event.url };
 }
 
 /** A whole multi-outcome event: the leading outcomes by price. */
@@ -51,7 +46,7 @@ export function partTop(event: MarketEvent, label: string, count = 4): Part {
     .filter((x): x is { name: string; p: number } => x.p !== null)
     .sort((a, b) => b.p - a.p)
     .slice(0, count);
-  const lines = priced.length ? priced.map((x) => `${x.name}: ${pct(x.p)}`) : ["No live prices right now"];
+  const lines = priced.length ? priced.map((x) => `${x.name} ${pct(x.p)}`) : ["no live prices"];
   return { label, title: event.title, lines, url: event.url };
 }
 
@@ -66,31 +61,33 @@ export function postLength(text: string): number {
 
 const clip = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, Math.max(max - 1, 1)).trimEnd()}…`);
 
-function render(parts: Part[], maxLines: number, maxTitle: number): string {
-  if (parts.length === 1) {
-    const p = parts[0];
-    const lines = p.lines.slice(0, maxLines);
-    const body =
-      lines.length === 1 ? `${lines[0]} on ${p.label}` : `${lines.join("\n")}\n(${p.label})`;
-    return `${clip(p.title, maxTitle)}\n${body}\n${p.url}`;
-  }
-  return parts
-    .map((p) => `${p.label}: ${clip(p.title, maxTitle)}\n${p.lines.slice(0, maxLines).join("\n")}\n${p.url}`)
-    .join("\n\n");
+/**
+ * One subject line, then one line per source: "Kalshi: 87% <link>". The question is stated
+ * once (the shortest wording on offer) rather than once per source; the links carry the rest.
+ */
+function render(parts: Part[], maxItems: number, maxTitle: number, maxItem: number): string {
+  // A specific question ("Will Bitcoin be above $150k by Dec 31?") says more than an event name
+  // ("When will Bitcoin hit $150k?"), so prefer the wording of a single-price part.
+  const specific = parts.filter((p) => p.lines.length === 1);
+  const title = (specific.length ? specific : parts)
+    .map((p) => p.title)
+    .reduce((a, b) => (b.length < a.length ? b : a));
+  const rows = parts.map(
+    (p) => `${p.label}: ${p.lines.slice(0, maxItems).map((l) => clip(l, maxItem)).join(", ")} ${p.url}`,
+  );
+  return [clip(title, maxTitle), ...rows].join("\n");
 }
 
-/** Compose the reply, trimming outcome lines first and titles second until it fits. */
+/** Compose the reply, trimming outcomes first, then the title, then long outcome names. */
 export function formatReply(parts: Part[]): string {
   const most = Math.max(...parts.map((p) => p.lines.length));
-  for (let lines = Math.min(most, parts.length === 1 ? 4 : 2); lines >= 1; lines--) {
-    const text = render(parts, lines, 400);
+  for (let items = Math.min(most, 4); items >= 1; items--) {
+    const text = render(parts, items, 100, 60);
     if (postLength(text) <= MAX_LEN) return text;
   }
-  for (let title = 120; title >= 10; title -= 5) {
-    const text = render(parts, 1, title);
+  for (const [title, item] of [[60, 60], [60, 30], [40, 20], [20, 12]]) {
+    const text = render(parts, 1, title, item);
     if (postLength(text) <= MAX_LEN) return text;
   }
-  // Even clipped titles did not fit (very long outcome names): keep only the first source.
-  const p = parts[0];
-  return `${clip(p.title, 60)}\n${clip(p.lines[0], 150)}\n${p.url}`;
+  return render(parts.slice(0, 1), 1, 20, 12);
 }
